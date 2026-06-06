@@ -335,8 +335,10 @@ export function paretoDominated(rows) {
 // Frontier-only view (cave UX): by default hide score-dominated guilds so the table shows only the
 // Pareto shortlist (at full squad ~4 of 66), with a toggle to reveal the rest. `dom` is the
 // paretoDominated map over the FULL row set (dominance must be judged against everyone, then filter).
-export function visibleRows(rows, dom, showDom) {
-  return showDom ? rows : rows.filter((r) => dom.get(r.gid) == null);
+export function visibleRows(rows, dom, showDom, keepGid) {
+  // frontier-only unless showDom; the SELECTED guild (keepGid) is always kept so the detail panel
+  // never shows a guild whose row vanished. Exactly: visible = frontier ∪ {selected}.
+  return showDom ? rows : rows.filter((r) => dom.get(r.gid) == null || r.gid === keepGid);
 }
 
 // Sort master rows by a column key. Numeric keys sort numerically; string keys
@@ -425,6 +427,10 @@ export function checkInvariants(bundle, seats = bundle.squad) {
   const maxFIT = Math.max(...bundle.two.map((t) => num(t.FITn)));
   const maxGET = Math.max(...bundle.two.map((t) => num(t.GETn)));
   add('fit-scale-100', maxFIT >= 99.5 && maxFIT <= 112, `max FITn = ${maxFIT} (base scale anchored ~100; prestige-blended guilds may read slightly >100, bounded <=112)`);
+  // Frontier (Pareto-non-dominated) is never empty when there are rows: the max-FITn (or max-GETn)
+  // guild cannot be beaten on BOTH axes. Guards the frontier-only default view from an empty table.
+  const _fr = paretoDominated(rows);
+  add('frontier-nonempty', rows.length === 0 || rows.some((r) => _fr.get(r.gid) == null), `Pareto frontier has >=1 guild of ${rows.length}`);
   add('get-scale-100', Math.abs(maxGET - 100) < 0.5, `max GETn in dataset = ${maxGET}`);
 
   // 7. The score row shown on each line describes the SAME kick depth as that line.
@@ -672,7 +678,7 @@ function render(){
   const dom = paretoDominated(rows);
   const nameOf = (gid)=>{ const m=rows.find(x=>x.gid===gid); return m?m.name:gid; };
   // Frontier-only by default: hide score-dominated guilds, with a toggle to reveal them.
-  const visible = visibleRows(rows, dom, state.showDom);
+  const visible = visibleRows(rows, dom, state.showDom, state.gid);
   visible.forEach(r=>{
     const [vtext,vcls]=verdictUI(r);
     const domBy = dom.get(r.gid);
@@ -718,7 +724,7 @@ function render(){
   app.append(drill());
 
   // ----- DOM-faithfulness audit: verify the RENDERED cells, not just the model -----
-  domAudit(visible);
+  domAudit(visible, rows, dom);
   syncSeatDock();
 }
 
@@ -747,7 +753,7 @@ function syncSeatDock(){
 
 // Reads the actual rendered table + drill-down and checks they match the model.
 // This is the "checks correctness of the data PRESENTED" guarantee at the DOM level.
-function domAudit(modelRows){
+function domAudit(modelRows, allRows, dom){
   const wrap=$('#domtests'); if(!wrap) return; wrap.innerHTML='';
   const checks=[]; const add=(name,pass,detail)=>checks.push({name,pass:!!pass,detail:detail||''});
   const trs=[...document.querySelectorAll('#app .card:nth-of-type(2) tbody tr')];
@@ -758,6 +764,22 @@ function domAudit(modelRows){
   const domNames=trs.map(tr=>cellText(tr,0));
   const wantNames=sortRows(modelRows,state.sort.k,state.sort.dir).map(r=>r.name);
   add('dom-sort-order', JSON.stringify(domNames)===JSON.stringify(wantNames), 'rendered order matches sortRows');
+  // 2b. FRONTIER PARTITION teeth: over the FULL set, hidden == dominated (minus the forced-visible
+  //     selected guild). Catches a filter bug that wrongly hides a frontier guild (the visible-only
+  //     audit above cannot see that). Skipped when showing all.
+  if(allRows && dom){
+    const visibleIds=new Set(modelRows.map(r=>r.gid));
+    let partitionOk=true, frontierHidden=false;
+    for(const r of allRows){
+      const dominated = dom.get(r.gid)!=null;
+      const shown = visibleIds.has(r.gid);
+      if(!state.showDom){
+        if(!dominated && !shown) frontierHidden=true;                 // frontier must never be hidden
+        if(dominated && shown && r.gid!==state.gid) partitionOk=false;  // dominated shown only if selected
+      }
+    }
+    add('dom-frontier-partition', !frontierHidden && partitionOk, 'hidden set == dominated set (minus selected); no frontier guild hidden');
+  }
   // 3. each rendered Members/Kicks/UsInGW/FIT cell matches the model row by name
   const byName={}; modelRows.forEach(r=>byName[r.name]=r);
   let memOk=true,kickOk=true,warOk=true,fitOk=true,getOk=true,goldOk=true,evOk=true;
