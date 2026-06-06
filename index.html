@@ -329,7 +329,10 @@ export function gapLabel(g) {
 // guild is flagged as a poor home even when it is easy to join.
 export const WEAK_HOME = 55;
 export function verdict(r) {
-  const f = num(r.FITn), g = num(r.GETn);
+  // Threshold on the INTEGER-ROUNDED scores that the table actually displays (toFixed(0)), so the
+  // verdict can never contradict the shown number (e.g. FITn 84.6 displays "85" - it must read as >=85,
+  // not the sub-85 verdict). Pick/ev keeps the raw precision; only the verdict ladder snaps to display.
+  const f = Math.round(num(r.FITn)), g = Math.round(num(r.GETn));
   if (f >= 85 && g >= 55) return { label: 'primary', tone: 'good', rank: 5 };
   if (f >= 85) return { label: 'stretch', tone: 'warn', rank: 4 };
   if (g >= 60 && f >= WEAK_HOME) return { label: 'easy sell', tone: 'good', rank: 3 };
@@ -346,16 +349,18 @@ export function verdict(r) {
 export const STABILITY_BAND = 4;
 const FIT_CUTS = [55, 65, 85], GET_CUTS = [55, 60];
 export function verdictStability(r) {
-  const f = num(r.FITn), g = num(r.GETn), base = verdict(r).label, b = STABILITY_BAND;
+  const f = Math.round(num(r.FITn)), g = Math.round(num(r.GETn)), base = verdict(r).label, b = STABILITY_BAND;
   // Find the NEAREST verdict cutoff (on either axis) whose crossing - within +-band - flips the
   // label. Report which axis, the cutoff, and the distance, so "borderline" says WHY, not just that.
+  // Works on the same integer-rounded scores verdict() uses; probes by a full integer step so the
+  // rounded probe reliably lands on the far side of the cut.
   let best = null;
   const consider = (axis, val, cut, probe) => {
-    const d = Math.round(Math.abs(val - cut) * 10) / 10;
+    const d = Math.abs(val - cut);
     if (d <= b && verdict(probe).label !== base && (!best || d < best.dist)) best = { axis, cut, dist: d };
   };
-  for (const c of FIT_CUTS) consider('FIT', f, c, { FITn: c + (f >= c ? -0.01 : 0.01), GETn: g });
-  for (const c of GET_CUTS) consider('GET', g, c, { FITn: f, GETn: c + (g >= c ? -0.01 : 0.01) });
+  for (const c of FIT_CUTS) consider('FIT', f, c, { FITn: c + (f >= c ? -1 : 1), GETn: g });
+  for (const c of GET_CUTS) consider('GET', g, c, { FITn: f, GETn: c + (g >= c ? -1 : 1) });
   return { stable: best === null, band: b, label: base, fragile: best };
 }
 
@@ -405,9 +410,13 @@ export function offModelExceptions(rows) {
   const m = new Map();
   if (!titans.length) return m;
   const p90 = titans[Math.floor(0.9 * (titans.length - 1))];
+  const med = titans[Math.floor(0.5 * (titans.length - 1))];
   for (const r of rows) {
     const t = num(r.titan);
-    if (dom2.get(r.gid) != null && Number.isFinite(t) && t >= p90) {
+    // require titan >= p90 AND strictly above the median, so a DEGENERATE pool (titans all-equal ->
+    // p90 == median) rescues NOBODY instead of exploding the frontier (titanite is not a differentiator
+    // when everyone has the same). For real, right-skewed titan this is automatically satisfied.
+    if (dom2.get(r.gid) != null && Number.isFinite(t) && t >= p90 && t > med) {
       const pct = Math.round(100 * titans.filter((v) => v <= t).length / titans.length);
       m.set(r.gid, { pct });
     }
