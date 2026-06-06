@@ -265,11 +265,19 @@ export function verdict(r) {
 // survive a +-BAND wobble on either axis? If not, it is "borderline" - read the raw FIT/GET, not
 // the word. Deterministic, no invented noise.
 export const STABILITY_BAND = 4;
+const FIT_CUTS = [55, 65, 85], GET_CUTS = [55, 60];
 export function verdictStability(r) {
   const f = num(r.FITn), g = num(r.GETn), base = verdict(r).label, b = STABILITY_BAND;
-  const probes = [[f + b, g], [f - b, g], [f, g + b], [f, g - b]];
-  const stable = !probes.some(([pf, pg]) => verdict({ FITn: pf, GETn: pg }).label !== base);
-  return { stable, band: b, label: base };
+  // Find the NEAREST verdict cutoff (on either axis) whose crossing - within +-band - flips the
+  // label. Report which axis, the cutoff, and the distance, so "borderline" says WHY, not just that.
+  let best = null;
+  const consider = (axis, val, cut, probe) => {
+    const d = Math.round(Math.abs(val - cut) * 10) / 10;
+    if (d <= b && verdict(probe).label !== base && (!best || d < best.dist)) best = { axis, cut, dist: d };
+  };
+  for (const c of FIT_CUTS) consider('FIT', f, c, { FITn: c + (f >= c ? -0.01 : 0.01), GETn: g });
+  for (const c of GET_CUTS) consider('GET', g, c, { FITn: f, GETn: c + (g >= c ? -0.01 : 0.01) });
+  return { stable: best === null, band: b, label: base, fragile: best };
 }
 
 // Pareto / dominance layer (cave pass #2, both engines #1): the ev product can rank an
@@ -642,7 +650,7 @@ function render(){
       el('td',{class:'r'}, bar(r.FITn,100,'#22c55e')),
       el('td',{class:'r'}, bar(r.GETn,100,'#0ea5e9') ),
       el('td',{class:'r'}, bar(r.ev,100,'#7c3aed') ),
-      el('td',{}, [el('span',{class:'pill',style:`background:${vcls==='good'?'var(--goodbg)':vcls==='warn'?'#fffbeb':'#f5f5f4'};color:${vcls==='good'?'var(--good)':vcls==='warn'?'var(--warn)':'var(--muted)'}`}, vtext), !vstab.stable?el('span',{class:'tag bord',style:'margin-left:4px'},'borderline'):null, r.conf==='low'?el('span',{class:'tag',style:'margin-left:4px'},'low-conf'):null, domBy?el('span',{class:'tag dom',style:'margin-left:4px'},'score-dominated by '+nameOf(domBy)):null]),
+      el('td',{}, [el('span',{class:'pill',style:`background:${vcls==='good'?'var(--goodbg)':vcls==='warn'?'#fffbeb':'#f5f5f4'};color:${vcls==='good'?'var(--good)':vcls==='warn'?'var(--warn)':'var(--muted)'}`}, vtext), !vstab.stable?el('span',{class:'tag bord',style:'margin-left:4px'},'borderline: '+vstab.fragile.axis+'@'+vstab.fragile.cut):null, r.conf==='low'?el('span',{class:'tag',style:'margin-left:4px'},'low-conf'):null, domBy?el('span',{class:'tag dom',style:'margin-left:4px'},'score-dominated by '+nameOf(domBy)):null]),
     );
     tb.append(tr);
   });
