@@ -195,11 +195,17 @@ export const FIT_W = { gold: 0.333, peer: 0.278, floor: 0.278, sustain: 0.111 };
 // merges). goldSoft keeps the engine ramp up to gap 1.2 (peak 100 at gap 1.0) but replaces the
 // clamp-to-0 tail with a gentle decline to a small floor, so "can't top Gold-1" != "worthless" and
 // ordering among non-toppers is preserved. Mirrors gen_data.gold_soft (drift-guarded by a test).
+export const GOLD_FLOOR = 8;       // a can't-top guild's gold never falls below this (soft, not a kill)
+const GOLD_AT_KNEE = 18;           // engine gold AT gap 1.2 (the soft tail starts here -> C0 continuous)
+const GOLD_TAIL_SLOPE = 20;        // gentle decline/gap-unit past 1.2 (vs the engine's ~410 cliff)
 export function goldSoft(g) {
+  // Overkill (gap<=0.833) is capped at 82, BELOW the gap=1.0 peak of 100, on purpose: a right-sized
+  // merge that just tops the server #1 is the ideal target; massively over-powering a weak server is
+  // a slightly worse "fit" (engine semantics, left unchanged). The soft-gate only changes the tail.
   if (g <= 0.833) return 82;
   if (g <= 1.0) return 82 + (g - 0.833) / 0.167 * 18;
-  if (g <= 1.2) return 100 + (g - 1.0) / 0.2 * (18 - 100);   // engine ramp 100 -> 18
-  return Math.max(8, 18 - (g - 1.2) * 20);                   // soft tail: floor 8, never a hard 0
+  if (g <= 1.2) return 100 + (g - 1.0) / 0.2 * (18 - 100);   // engine ramp 100 -> 18 (UNCHANGED)
+  return Math.max(GOLD_FLOOR, GOLD_AT_KNEE - (g - 1.2) * GOLD_TAIL_SLOPE);  // soft tail (was clamp->0)
 }
 
 export const PRESTIGE_W = 0.15;
