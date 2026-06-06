@@ -630,6 +630,8 @@ const TIP = {
   titan:'<b>Titanite / week.</b> Guild-chest titanite the merged roster would generate. Higher sustains gear progression. <em>Wide spread across targets: ~12k low, 60k median, 430k high \u2013 a real discriminator between dead and thriving guilds.</em>',
   keptlive:'<b>Kept live (%).</b> Share of the members we would KEEP (after kicks) who logged in within 7 days. <em>FIT scores the kept roster\u2019s POWER; this folds in whether they still PLAY as a FIT multiplier: gentle in the 60-100% range (down to ~6% off), but STEEP below 60% (down to a 50% cut at 0% active) so a near-dead roster cannot read as \u201cprimary\u201d. Unknown \u201c?\u201d takes a small caution haircut (~3%), not a free pass and not max-punished. Guards against a dead-but-cheap guild. In the current set it is near-uniformly high (min 70%, median 100%), so it rarely moves the ranking here.</em>',
   metric:'<b>FIT metric v2.</b> The score was revised: the near-constant <b>sustain</b> term was dropped, the <b>gold</b> gate is now soft (no binary kill for guilds that can\u2019t top Gold-1), guild <b>prestige</b> and kept-roster <b>liveness</b> are folded into FIT, and FITn is normalized against the <b>95th-percentile</b> guild (frozen), so a top-tier guild reads ~100 and the very top read a little above. <em>v2 FITn values are NOT comparable to older v1 scores/screenshots.</em>',
+  drivers:'<b>Effective weights.</b> Each component\u2019s share of the SCORE SPREAD \u2013 its nominal weight \u00d7 how much it actually varies across guilds \u2013 on the full-squad (seat 20) basis. The bracket is a 95% confidence interval from bootstrapping the guild sample (n is small, so treat these as indicative, not exact). FIT spread is dominated by the Gold-1 gap; GET\u2019s drivers are individually less certain (wide CIs).',
+  rankband:'<b>Full-squad rank band.</b> This guild\u2019s Pick (ev) rank among all candidates at full squad, with an 80% band from bootstrapping which guilds happen to be in the pool (n is small). A WIDE band means the exact position is fragile \u2013 read the raw FIT/GET, not the rank number.',
   frontier:'<b>Frontier view.</b> By default the table shows only the Pareto frontier \u2013 guilds NOT beaten on both FIT and GET by another. Score-dominated guilds (never the best pick on FIT+GET) are hidden to cut noise; click to show all (they appear dimmed). <em>Exception: a dominated guild that LEADS on titanite (which FIT does not capture) is kept automatically and tagged \u201c+titanite\u201d, so a thriving-but-not-top guild is never silently hidden.</em>',
   prestige:'<b>Prestige (percentile).</b> The guild\u2019s cumulative prestige total, shown as its percentile P0\u2013P100 within the captured guild pool. <em>Folded into FIT as an ADD-ONLY bonus where KNOWN: FIT gains 0.15\u00d7(percentile above the P50 median), up to about +7.5 for a P100 guild. It NEVER lowers a guild\u2019s FIT \u2013 a low-prestige or unknown guild is not penalised (avoids rewarding missing data). Coverage is partial (passive capture); \u201cprestige?\u201d = unknown = no change. Higher = more established guild.</em>',
   fit:'<b>FIT (0\u2013100).</b> How GOOD the merged guild is FOR US: gold, peer balance, floor strength. <em>At the default full-squad (seat 20) setting the Gold-1 gap DOMINATES (~2/3 of the spread); peer and floor are the rest (the near-constant \u201csustain\u201d term was dropped in metric v2 \u2013 EXCLUDED for data quality, not unimportance: cap-margin data was missing/zero for ~97 of 110 guilds, so it scored an identical 43 for nearly all and added no signal). The mix shifts as you drag the slider. Where guild PRESTIGE is above the median it adds a small bonus (up to ~7.5; see the Prestige column); it never lowers FIT, and unknown leaves it unchanged. The presented FIT is then scaled by kept-roster LIVENESS (gentle above 60% active, steep below; a near-dead roster trims it up to 50%; see Kept live). Anchored to a FIXED 2026-06 reference (metric v1), so a guild\u2019s FIT does not change when OTHER guilds enter; re-baseline per season. Spread ~31/64/91 (median 64) over 66 guilds. Higher = better home ON MEASURED DIMS ONLY \u2013 it does NOT weigh the activity of the members you KEEP (see the Kept-live column), and carries no confidence band. See GET for acceptance odds.</em>',
@@ -659,6 +661,15 @@ const state = { seats: defaultSeats, gid: _full.length ? _full[0].gid : bundle.d
 
 function verdictUI(r){ const v=verdict(r); return [v.label, v.tone]; }
 
+function driversCard(){
+  const u=bundle.uncertainty; if(!u||!u.effweights) return el('div');
+  const card=el('div',{class:'card'});
+  card.append(el('div',{class:'row',style:'margin-bottom:6px'},[el('strong',{},'What drives the score'),el('span',{class:'muted',style:'font-size:12px'},' \u00b7 full-squad basis \u00b7 bootstrap 95% CI \u00b7 n='+u.n),help(TIP.drivers)]));
+  const chips=(o)=>Object.keys(o).map(c=>el('span',{class:'tag',style:'margin-right:6px'}, c+' '+o[c].pt+'% ['+o[c].lo+'\u2013'+o[c].hi+']'));
+  card.append(el('div',{class:'row',style:'flex-wrap:wrap;gap:4px'},[el('span',{class:'muted',style:'width:38px;display:inline-block'},'FIT'),...chips(u.effweights.fit)]));
+  card.append(el('div',{class:'row',style:'flex-wrap:wrap;gap:4px;margin-top:4px'},[el('span',{class:'muted',style:'width:38px;display:inline-block'},'GET'),...chips(u.effweights.get)]));
+  return card;
+}
 function render(){
   const app = $('#app'); app.innerHTML='';
 
@@ -809,6 +820,9 @@ function render(){
   tcard.append(el('div',{class:'row',style:'margin-bottom:6px'}, hdrKids));
   tcard.append(el('div',{class:'scrollx'}, tbl));
   app.append(tcard);
+
+  // ----- F8: what drives the score (effective weights + bootstrap CIs) -----
+  app.append(driversCard());
 
   // ----- drill-down -----
   app.append(drill());
@@ -988,6 +1002,8 @@ function drill(){
     stat('FIT',num(sc.FITn).toFixed(0),TIP.fit),
     stat('GET',num(sc.GETn).toFixed(0)+(sc.conf==='low'?'*':''),TIP.get),
   );
+  const rb=(bundle.uncertainty&&bundle.uncertainty.rankband)?bundle.uncertainty.rankband[gid]:null;
+  if(rb) grid.append(stat('Full-squad rank','#'+rb.rank+' ('+rb.lo+'\u2013'+rb.hi+')',TIP.rankband));
   card.append(grid);
 
   // rosters
