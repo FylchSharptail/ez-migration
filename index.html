@@ -365,17 +365,44 @@ export function verdictStability(r) {
 // better target on every dimension, so it is never the right pick. The non-dominated set is the
 // Pareto FRONTIER: the real shortlist. Returns Map gid -> dominator gid (or null if on the
 // frontier). Exact ties are mutually non-dominated (both kept on the frontier).
-export function paretoDominated(rows) {
+// Generalized Pareto dominance over an arbitrary vector of higher-is-better axes (field names).
+// R is dominated by S iff S is >= R on every axis and strictly greater on at least one. Returns
+// gid -> dominator gid (or null = on the frontier for that axis set).
+export function paretoDominatedV(rows, axes) {
   const m = new Map();
   for (const r of rows) {
-    const rf = num(r.FITn), rg = num(r.GETn);
     let by = null;
     for (const s of rows) {
       if (s === r || s.gid === r.gid) continue;
-      const sf = num(s.FITn), sg = num(s.GETn);
-      if (sf >= rf && sg >= rg && (sf > rf || sg > rg)) { by = s.gid; break; }
+      let ge = true, gt = false;
+      for (const a of axes) {
+        const rv = num(r[a]), sv = num(s[a]);
+        if (sv < rv) { ge = false; break; }
+        if (sv > rv) gt = true;
+      }
+      if (ge && gt) { by = s.gid; break; }
     }
     m.set(r.gid, by);
+  }
+  return m;
+}
+
+// The headline frontier is 2-axis (FITn, GETn) - the decision axes.
+export function paretoDominated(rows) {
+  return paretoDominatedV(rows, ['FITn', 'GETn']);
+}
+
+// F5: off-model strength exceptions. A guild that is score-dominated on (FITn, GETn) but is NOT
+// dominated once an OFF-MODEL axis (titanite/week, which FIT does not capture) is added to the vector
+// is rescued BY that axis - it leads on titanite over anything that beats it on FIT/GET. Such guilds get
+// a "+titanite" badge and stay on the default frontier so a thriving-but-not-top guild is not hidden.
+// (Prestige/liveness are already folded into FIT; titan is the one dense, genuinely off-model axis.)
+export function offModelExceptions(rows) {
+  const dom2 = paretoDominatedV(rows, ['FITn', 'GETn']);
+  const dom3 = paretoDominatedV(rows, ['FITn', 'GETn', 'titan']);
+  const m = new Map();
+  for (const r of rows) {
+    if (dom2.get(r.gid) != null && dom3.get(r.gid) == null) m.set(r.gid, ['titanite']);
   }
   return m;
 }
@@ -383,10 +410,11 @@ export function paretoDominated(rows) {
 // Frontier-only view (cave UX): by default hide score-dominated guilds so the table shows only the
 // Pareto shortlist (at full squad ~4 of 66), with a toggle to reveal the rest. `dom` is the
 // paretoDominated map over the FULL row set (dominance must be judged against everyone, then filter).
-export function visibleRows(rows, dom, showDom, keepGid) {
-  // frontier-only unless showDom; the SELECTED guild (keepGid) is always kept so the detail panel
-  // never shows a guild whose row vanished. Exactly: visible = frontier ∪ {selected}.
-  return showDom ? rows : rows.filter((r) => dom.get(r.gid) == null || r.gid === keepGid);
+export function visibleRows(rows, dom, showDom, keepGid, exc) {
+  // frontier-only unless showDom. Always kept: the SELECTED guild (keepGid, so the detail panel never
+  // shows a vanished row) and OFF-MODEL EXCEPTIONS (F5: dominated on FIT/GET but leading on titanite).
+  // Exactly: visible = frontier ∪ off-model-exceptions ∪ {selected}.
+  return showDom ? rows : rows.filter((r) => dom.get(r.gid) == null || r.gid === keepGid || (exc != null && exc.has(r.gid)));
 }
 
 // Sort master rows by a column key. Numeric keys sort numerically; string keys
@@ -594,7 +622,7 @@ const TIP = {
   titan:'<b>Titanite / week.</b> Guild-chest titanite the merged roster would generate. Higher sustains gear progression. <em>Wide spread across targets: ~12k low, 60k median, 430k high \u2013 a real discriminator between dead and thriving guilds.</em>',
   keptlive:'<b>Kept live (%).</b> Share of the members we would KEEP (after kicks) who logged in within 7 days. <em>FIT scores the kept roster\u2019s POWER; this folds in whether they still PLAY as a FIT multiplier: gentle in the 60-100% range (down to ~6% off), but STEEP below 60% (down to a 50% cut at 0% active) so a near-dead roster cannot read as \u201cprimary\u201d. Unknown \u201c?\u201d takes a small caution haircut (~3%), not a free pass and not max-punished. Guards against a dead-but-cheap guild. In the current set it is near-uniformly high (min 70%, median 100%), so it rarely moves the ranking here.</em>',
   metric:'<b>FIT metric v2.</b> The score was revised: the near-constant <b>sustain</b> term was dropped, the <b>gold</b> gate is now soft (no binary kill for guilds that can\u2019t top Gold-1), guild <b>prestige</b> and kept-roster <b>liveness</b> are folded into FIT, and FITn is normalized against the <b>95th-percentile</b> guild (frozen), so a top-tier guild reads ~100 and the very top read a little above. <em>v2 FITn values are NOT comparable to older v1 scores/screenshots.</em>',
-  frontier:'<b>Frontier view.</b> By default the table shows only the Pareto frontier \u2013 guilds NOT beaten on both FIT and GET by another. Score-dominated guilds (never the best pick) are hidden to cut noise; click to show all (they appear dimmed). <em>A hidden guild can still lead on titanite or activity, so reveal them if those matter.</em>',
+  frontier:'<b>Frontier view.</b> By default the table shows only the Pareto frontier \u2013 guilds NOT beaten on both FIT and GET by another. Score-dominated guilds (never the best pick on FIT+GET) are hidden to cut noise; click to show all (they appear dimmed). <em>Exception: a dominated guild that LEADS on titanite (which FIT does not capture) is kept automatically and tagged \u201c+titanite\u201d, so a thriving-but-not-top guild is never silently hidden.</em>',
   prestige:'<b>Prestige (percentile).</b> The guild\u2019s cumulative prestige total, shown as its percentile P0\u2013P100 within the captured guild pool. <em>Folded into FIT as an ADD-ONLY bonus where KNOWN: FIT gains 0.15\u00d7(percentile above the P50 median), up to about +7.5 for a P100 guild. It NEVER lowers a guild\u2019s FIT \u2013 a low-prestige or unknown guild is not penalised (avoids rewarding missing data). Coverage is partial (passive capture); \u201cprestige?\u201d = unknown = no change. Higher = more established guild.</em>',
   fit:'<b>FIT (0\u2013100).</b> How GOOD the merged guild is FOR US: gold, peer balance, floor strength. <em>At the default full-squad (seat 20) setting the Gold-1 gap DOMINATES (~2/3 of the spread); peer and floor are the rest (the near-constant \u201csustain\u201d term was dropped in metric v2 \u2013 EXCLUDED for data quality, not unimportance: cap-margin data was missing/zero for ~97 of 110 guilds, so it scored an identical 43 for nearly all and added no signal). The mix shifts as you drag the slider. Where guild PRESTIGE is above the median it adds a small bonus (up to ~7.5; see the Prestige column); it never lowers FIT, and unknown leaves it unchanged. The presented FIT is then scaled by kept-roster LIVENESS (gentle above 60% active, steep below; a near-dead roster trims it up to 50%; see Kept live). Anchored to a FIXED 2026-06 reference (metric v1), so a guild\u2019s FIT does not change when OTHER guilds enter; re-baseline per season. Spread ~31/64/91 (median 64) over 66 guilds. Higher = better home ON MEASURED DIMS ONLY \u2013 it does NOT weigh the activity of the members you KEEP (see the Kept-live column), and carries no confidence band. See GET for acceptance odds.</em>',
   get:'<b>GET (0\u2013100) = ease of acquisition: high GET means the GM likely says YES.</b> Built from low disruption (few ACTIVE members the GM must kick \u2013 most guilds sit near the top of this), open seats, and GM motivation (a coarse league-rank proxy). When a target\u2019s rank is UNKNOWN, motivation is treated as MISSING: it is dropped from GET (the other two terms are renormalized) and the row is marked low-confidence, rather than guessing a neutral value. <em>At the default full-squad setting open-seats and motivation dominate; disruption matters more for small moves. Spread ~25/54/90 (median 54). * = low confidence. e.g. The Wayfarer Inn GET 87 (very gettable). High GET says NOTHING about whether it is a good home \u2013 always read FIT too.</em>',
@@ -726,8 +754,10 @@ function render(){
   // right pick), so the non-dimmed rows are the real shortlist (the frontier).
   const dom = paretoDominated(rows);
   const nameOf = (gid)=>{ const m=rows.find(x=>x.gid===gid); return m?m.name:gid; };
-  // Frontier-only by default: hide score-dominated guilds, with a toggle to reveal them.
-  const visible = visibleRows(rows, dom, state.showDom, state.gid);
+  // Frontier-only by default: hide score-dominated guilds, with a toggle to reveal them. Off-model
+  // exceptions (F5: dominated on FIT/GET but leading on titanite) stay visible and get a +titanite tag.
+  const exc = offModelExceptions(rows);
+  const visible = visibleRows(rows, dom, state.showDom, state.gid, exc);
   visible.forEach(r=>{
     const [vtext,vcls]=verdictUI(r);
     const domBy = dom.get(r.gid);
@@ -750,7 +780,7 @@ function render(){
       el('td',{class:'r'}, bar(r.FITn,100,'#22c55e')),
       el('td',{class:'r'}, bar(r.GETn,100,'#0ea5e9') ),
       el('td',{class:'r'}, bar(r.ev,100,'#7c3aed') ),
-      el('td',{}, [el('span',{class:'pill',style:`background:${vcls==='good'?'var(--goodbg)':vcls==='warn'?'#fffbeb':'#f5f5f4'};color:${vcls==='good'?'var(--good)':vcls==='warn'?'var(--warn)':'var(--muted)'}`}, vtext), !vstab.stable?el('span',{class:'tag bord',style:'margin-left:4px'},'borderline: '+vstab.fragile.axis+'@'+vstab.fragile.cut):null, r.conf==='low'?el('span',{class:'tag',style:'margin-left:4px'},'low-conf'):null, domBy?el('span',{class:'tag dom',style:'margin-left:4px'},'score-dominated by '+nameOf(domBy)):null]),
+      el('td',{}, [el('span',{class:'pill',style:`background:${vcls==='good'?'var(--goodbg)':vcls==='warn'?'#fffbeb':'#f5f5f4'};color:${vcls==='good'?'var(--good)':vcls==='warn'?'var(--warn)':'var(--muted)'}`}, vtext), !vstab.stable?el('span',{class:'tag bord',style:'margin-left:4px'},'borderline: '+vstab.fragile.axis+'@'+vstab.fragile.cut):null, r.conf==='low'?el('span',{class:'tag',style:'margin-left:4px'},'low-conf'):null, domBy?el('span',{class:'tag dom',style:'margin-left:4px'},'score-dominated by '+nameOf(domBy)):null, exc.has(r.gid)?el('span',{class:'tag',style:'margin-left:4px;color:#a16207;border-color:#a16207'},'+titanite'):null]),
       el('td',{class:'r'+(r.keptLive!=null&&r.keptLive<60?' ':'')}, r.keptLive==null?el('span',{class:'muted'},'?'):el('span',{class:(r.keptLive<60?'gbad':r.keptLive>=85?'ggood':'gmut')}, r.keptLive+'%')),
       el('td',{class:'r'}, r.pkn?el('span',{class:(r.p100>=66?'ggood':r.p100<33?'gmut':'')}, 'P'+r.p100):el('span',{class:'tag'},'prestige?')),
     );
@@ -758,10 +788,13 @@ function render(){
   });
   tbl.append(tb);
   const tcard=el('div',{class:'card'});
-  const nDom = rows.length - rows.filter(r=>dom.get(r.gid)==null).length;
-  const hdrKids=[el('strong',{},'Candidate guilds'),el('span',{class:'muted',style:'font-size:12px'},' \u00b7 click a row for the merged roster')];
-  if(nDom>0){
-    const tog=el('button',{type:'button',class:'pill',style:'margin-left:8px;cursor:pointer'}, state.showDom?('hide '+nDom+' score-dominated'):(nDom+' score-dominated hidden \u2013 show all'));
+  // Hidden = score-dominated AND not rescued by an off-model exception AND not the selected row.
+  const nHidden = rows.filter(r=>dom.get(r.gid)!=null && !exc.has(r.gid) && r.gid!==state.gid).length;
+  const nExc = exc.size;
+  const excNote = nExc>0 ? ' \u00b7 '+nExc+' kept for +titanite' : '';
+  const hdrKids=[el('strong',{},'Candidate guilds'),el('span',{class:'muted',style:'font-size:12px'},' \u00b7 click a row for the merged roster'+excNote)];
+  if(nHidden>0){
+    const tog=el('button',{type:'button',class:'pill',style:'margin-left:8px;cursor:pointer'}, state.showDom?('hide '+nHidden+' score-dominated'):(nHidden+' score-dominated hidden \u2013 show all'));
     tog.addEventListener('click',()=>{ state.showDom=!state.showDom; render(); });
     hdrKids.push(tog, help(TIP.frontier));
   }
@@ -773,7 +806,7 @@ function render(){
   app.append(drill());
 
   // ----- DOM-faithfulness audit: verify the RENDERED cells, not just the model -----
-  domAudit(visible, rows, dom);
+  domAudit(visible, rows, dom, exc);
   syncSeatDock();
 }
 
@@ -802,7 +835,7 @@ function syncSeatDock(){
 
 // Reads the actual rendered table + drill-down and checks they match the model.
 // This is the "checks correctness of the data PRESENTED" guarantee at the DOM level.
-function domAudit(modelRows, allRows, dom){
+function domAudit(modelRows, allRows, dom, exc){
   const wrap=$('#domtests'); if(!wrap) return; wrap.innerHTML='';
   const checks=[]; const add=(name,pass,detail)=>checks.push({name,pass:!!pass,detail:detail||''});
   const trs=[...document.querySelectorAll('#app .card:nth-of-type(2) tbody tr')];
@@ -824,7 +857,8 @@ function domAudit(modelRows, allRows, dom){
       const shown = visibleIds.has(r.gid);
       if(!state.showDom){
         if(!dominated && !shown) frontierHidden=true;                 // frontier must never be hidden
-        if(dominated && shown && r.gid!==state.gid) partitionOk=false;  // dominated shown only if selected
+        const rescued = r.gid===state.gid || (exc && exc.has(r.gid)); // selected or off-model exception
+        if(dominated && shown && !rescued) partitionOk=false;          // dominated shown only if rescued
       }
     }
     add('dom-frontier-partition', !frontierHidden && partitionOk, 'hidden set == dominated set (minus selected); no frontier guild hidden');
