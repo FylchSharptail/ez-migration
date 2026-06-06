@@ -163,6 +163,18 @@ export function computeMerge(theirRoster, ours, seats, cap = 30) {
   return { kicks, kept, seated, seatCount, kicked, pool: top, rankById, inIds, merged: top.length, usInWar };
 }
 
+// Kept-roster liveness (cave pass #4, unanimous blocker): FIT scores the KEPT members' POWER but
+// ignores whether they are still LOGGING IN. A dead-but-cheap guild can score well. This measures
+// the share of the members we would KEEP (after kicks) who are active within `days` (idle<=days).
+// Returns {pct, active, n}; pct is null when there is no measured kept roster (unknown != 0%).
+export function keptLiveness(kept, days = 7) {
+  const known = kept.filter((m) => Number.isFinite(num(m.idle)) && m.idle != null);
+  const n = kept.length;
+  if (!n) return { pct: null, active: 0, n: 0 };
+  const active = kept.filter((m) => num(m.idle) <= days).length;
+  return { pct: Math.round(active / n * 100), active, n, knownN: known.length };
+}
+
 // GW (Guild War) battle team = strongest 20 of the merged guild. AoC/CoW use all 30.
 export const GW_TEAM = 20;
 export function warTeamSize(merged) { return Math.min(GW_TEAM, merged); }
@@ -205,6 +217,7 @@ export function buildMasterRows(bundle, seats) {
     const sc = lookupScore(bundle.two, gid, mg.kicks) || {};
     const dAtK = bundle.depth.find((d) => d.gid === gid && num(d.kicks) === mg.kicks) || {};
     const lang = (bundle.members.find((m) => m.gid === gid) || {}).lang || '?';
+    const kl = keptLiveness(mg.kept);
     return {
       gid,
       name: drow.guild || gid,
@@ -224,6 +237,9 @@ export function buildMasterRows(bundle, seats) {
       GETn: num(sc.GETn),
       ev: num(sc.FITn) * num(sc.GETn) / 100,
       conf: sc.conf || 'high',
+      keptLive: kl.pct,            // % of the KEPT roster active <=7d (liveness FIT ignores; null=unknown)
+      keptActive: kl.active,
+      keptN: kl.n,
     };
   });
 }
@@ -309,6 +325,7 @@ const SORT_KEYS = {
   members: (r) => num(r.roster), kicks: (r) => num(r.kicks), active: (r) => num(r.active),
   war: (r) => num(r.usInWar), gold: (r) => num(r.goldgap), titan: (r) => num(r.titan),
   FIT: (r) => num(r.FITn), GET: (r) => num(r.GETn), ev: (r) => ev(r), verdict: (r) => verdict(r).rank,
+  keptlive: (r) => num(r.keptLive),
 };
 export function sortRows(rows, key, dir = -1) {
   const get = SORT_KEYS[key] || SORT_KEYS.FIT;
@@ -498,7 +515,8 @@ const TIP = {
   gold:'<b>Gold-1 gap.</b> The target server\u2019s #1 guild total top-30 power \u00f7 our merged top-30 power. <em>LOWER is better: \u22641.00 = we\u2019d BE the server\u2019s #1; \u22641.03 = we contend for #1; >1.03 = we join but won\u2019t top it; >1.20 \u2248 can\u2019t win Gold. Baseline is anchored to a PRIOR server-ranking snapshot (the live champion is not re-fetched), so treat as approximate. Typical spread: ~0.9 (p25) to 1.1 (p75), median 1.0; roughly 1 in 5 candidates sit above 1.20 and are effectively filtered out. e.g. Sacred Childs \u22641.0 (would BE #1) vs Sparta >1.2 (cannot top).</em>',
   ev:'<b>Pick score = FIT \u00d7 GET / 100.</b> A convenience blend of quality FOR US and the odds the GM accepts. <em>Spread ~10 low, 35 median, 72 high (default sort). NOT a probability \u2013 read FIT and GET separately, not Pick alone. It deliberately demotes traps: The Wayfarer Inn (FIT 57, GET 87) outscores on GET but its Pick (~49) sits below balanced homes like german black sheeps (FIT 90, GET 80, Pick 72). A high-GET / low-FIT guild is a weak home, not a target.</em>',
   titan:'<b>Titanite / week.</b> Guild-chest titanite the merged roster would generate. Higher sustains gear progression. <em>Wide spread across targets: ~12k low, 60k median, 430k high \u2013 a real discriminator between dead and thriving guilds.</em>',
-  fit:'<b>FIT (0\u2013100).</b> How GOOD the merged guild is FOR US: gold, peer balance, floor strength, sustain. <em>At the default full-squad (seat 20) setting the Gold-1 gap DOMINATES (~2/3 of the spread); peer/floor are minor and sustain barely moves it \u2013 the mix shifts as you drag the slider. Anchored to a FIXED 2026-06 reference (metric v1), so a guild\u2019s FIT does not change when OTHER guilds enter; re-baseline per season. Spread ~31/64/91 (median 64) over 66 guilds. Higher = better home ON MEASURED DIMS ONLY \u2013 it does NOT yet weigh the activity of the members you KEEP, and carries no confidence band. See GET for acceptance odds.</em>',
+  keptlive:'<b>Kept live (%).</b> Share of the members we would KEEP (after kicks) who logged in within 7 days. <em>FIT scores the kept roster\u2019s POWER but NOT whether they still play, so this is the liveness guard FIT ignores (cave review). In the current candidate set it is near-uniformly high (min 70%, median 100%) \u2013 so it rarely separates these targets, but a LOW value is a red flag the scores would miss (a dead-but-cheap guild). \u201c?\u201d = no login data for the kept roster.</em>',
+  fit:'<b>FIT (0\u2013100).</b> How GOOD the merged guild is FOR US: gold, peer balance, floor strength, sustain. <em>At the default full-squad (seat 20) setting the Gold-1 gap DOMINATES (~2/3 of the spread); peer/floor are minor and sustain barely moves it \u2013 the mix shifts as you drag the slider. Anchored to a FIXED 2026-06 reference (metric v1), so a guild\u2019s FIT does not change when OTHER guilds enter; re-baseline per season. Spread ~31/64/91 (median 64) over 66 guilds. Higher = better home ON MEASURED DIMS ONLY \u2013 it does NOT weigh the activity of the members you KEEP (see the Kept-live column), and carries no confidence band. See GET for acceptance odds.</em>',
   get:'<b>GET (0\u2013100) = ease of acquisition: high GET means the GM likely says YES.</b> Built from low disruption (few ACTIVE members the GM must kick \u2013 most guilds sit near the top of this), open seats, and GM motivation (a coarse league-rank proxy; \u201cunknown\u201d is a placeholder, not a measurement). <em>At the default full-squad setting open-seats and motivation dominate; disruption matters more for small moves. Spread ~25/54/90 (median 54). * = low confidence. e.g. The Wayfarer Inn GET 87 (very gettable). High GET says NOTHING about whether it is a good home \u2013 always read FIT too.</em>',
   verdict:'<b>Read.</b> A plain-language take combining FIT and GET. Rule: primary = FIT\u226585 & GET\u226555; stretch = FIT\u226585 (great home, hard to get); easy sell = GET\u226560 & FIT\u226555; weak home = GET\u226560 but FIT<55 (gettable yet a poor home \u2013 FIT is what you live in for months, GET is a one-time gate); fallback = FIT\u226565; else marginal. <em>These are HARD cutoffs \u2013 a guild a point under a line flips label, so read the raw FIT/GET too, not just the word. e.g. german black sheeps (90/80) = primary; The Wayfarer Inn (57/87) = easy sell but only a mediocre home. Rows shown DIMMED are \u201cscore-dominated\u201d: another guild beats them on BOTH FIT and GET at once. This is FIT/GET ONLY \u2013 a dimmed guild can still lead on titanite or member activity, so scan those columns before discarding it. The non-dimmed rows are the FIT/GET Pareto shortlist. A \u201cborderline\u201d tag means the verdict sits within \u00b14 points of a cutoff and could flip with small data error \u2013 trust the raw FIT/GET there, not the label.</em>',
   seats:'<b>Seats slider.</b> How many of our 20 players we insist on seating. Each guild then needs a different number of kicks to make room \u2014 that is why the table is not uniform.',
@@ -610,7 +628,7 @@ function render(){
     ['Guild','name','l',TIP.guild],['Srv','srv','r',TIP.srv],['Lang','lang','l',TIP.lang],
     ['Members','members','r',TIP.members],['Kicks','kicks','r',TIP.kicks],['Active hit','active','r',TIP.active],
     ['Us in GW','war','r',TIP.war],['Gold gap','gold','r',TIP.gold],['Titan/wk','titan','r',TIP.titan],
-    ['FIT','FIT','r',TIP.fit],['GET','GET','r',TIP.get],[(state.seats<bundle.squad?('Pick @'+state.seats):'Pick'),'ev','r',TIP.ev],['Read','verdict','l',TIP.verdict],
+    ['FIT','FIT','r',TIP.fit],['GET','GET','r',TIP.get],[(state.seats<bundle.squad?('Pick @'+state.seats):'Pick'),'ev','r',TIP.ev],['Read','verdict','l',TIP.verdict],['Kept live','keptlive','r',TIP.keptlive],
   ];
   const tbl = el('table');
   const thead = el('thead'); const htr = el('tr');
@@ -651,6 +669,7 @@ function render(){
       el('td',{class:'r'}, bar(r.GETn,100,'#0ea5e9') ),
       el('td',{class:'r'}, bar(r.ev,100,'#7c3aed') ),
       el('td',{}, [el('span',{class:'pill',style:`background:${vcls==='good'?'var(--goodbg)':vcls==='warn'?'#fffbeb':'#f5f5f4'};color:${vcls==='good'?'var(--good)':vcls==='warn'?'var(--warn)':'var(--muted)'}`}, vtext), !vstab.stable?el('span',{class:'tag bord',style:'margin-left:4px'},'borderline: '+vstab.fragile.axis+'@'+vstab.fragile.cut):null, r.conf==='low'?el('span',{class:'tag',style:'margin-left:4px'},'low-conf'):null, domBy?el('span',{class:'tag dom',style:'margin-left:4px'},'score-dominated by '+nameOf(domBy)):null]),
+      el('td',{class:'r'+(r.keptLive!=null&&r.keptLive<60?' ':'')}, r.keptLive==null?el('span',{class:'muted'},'?'):el('span',{class:(r.keptLive<60?'gbad':r.keptLive>=85?'ggood':'gmut')}, r.keptLive+'%')),
     );
     tb.append(tr);
   });
