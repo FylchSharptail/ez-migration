@@ -328,11 +328,15 @@ export function gapLabel(g) {
 // high GET must NOT dress up a low-FIT guild as a good target. Below WEAK_HOME a
 // guild is flagged as a poor home even when it is easy to join.
 export const WEAK_HOME = 55;
+// The value the table shows for a 0-100 score: the LITERAL display expression used in the renderer
+// (num(x).toFixed(0)). Verdict logic keys off this so display and verdict are the same number by
+// construction (no Math.round-vs-toFixed inference). Non-negative scores only.
+export const dispScore = (x) => Number(num(x).toFixed(0));
 export function verdict(r) {
-  // Threshold on the INTEGER-ROUNDED scores that the table actually displays (toFixed(0)), so the
-  // verdict can never contradict the shown number (e.g. FITn 84.6 displays "85" - it must read as >=85,
-  // not the sub-85 verdict). Pick/ev keeps the raw precision; only the verdict ladder snaps to display.
-  const f = Math.round(num(r.FITn)), g = Math.round(num(r.GETn));
+  // Threshold on the scores the table actually displays. dispScore uses the LITERAL display expression
+  // (Number(x.toFixed(0))), so the verdict can never contradict the shown number (e.g. FITn 84.6 shows
+  // "85" -> reads as >=85). Structural, not merely "Math.round happens to equal toFixed". ev keeps raw.
+  const f = dispScore(r.FITn), g = dispScore(r.GETn);
   if (f >= 85 && g >= 55) return { label: 'primary', tone: 'good', rank: 5 };
   if (f >= 85) return { label: 'stretch', tone: 'warn', rank: 4 };
   if (g >= 60 && f >= WEAK_HOME) return { label: 'easy sell', tone: 'good', rank: 3 };
@@ -349,7 +353,7 @@ export function verdict(r) {
 export const STABILITY_BAND = 4;
 const FIT_CUTS = [55, 65, 85], GET_CUTS = [55, 60];
 export function verdictStability(r) {
-  const f = Math.round(num(r.FITn)), g = Math.round(num(r.GETn)), base = verdict(r).label, b = STABILITY_BAND;
+  const f = dispScore(r.FITn), g = dispScore(r.GETn), base = verdict(r).label, b = STABILITY_BAND;
   // Find the NEAREST verdict cutoff (on either axis) whose crossing - within +-band - flips the
   // label. Report which axis, the cutoff, and the distance, so "borderline" says WHY, not just that.
   // Works on the same integer-rounded scores verdict() uses; probes by a full integer step so the
