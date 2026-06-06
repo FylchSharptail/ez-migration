@@ -28,6 +28,9 @@
   thead th.r,td.r{text-align:right;font-variant-numeric:tabular-nums}
   tbody tr{border-bottom:1px solid #f1f0ef;cursor:pointer}
   tbody tr:hover{background:#fafaf9}
+  tbody tr.dominated{opacity:.5}
+  tbody tr.dominated:hover{opacity:.85}
+  .tag.dom{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
   tbody tr.sel{background:var(--usbg);box-shadow:inset 3px 0 0 var(--us)}
   .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600}
   .bar{position:relative;display:inline-block;min-width:48px;height:16px;background:#f1f0ef;border-radius:4px;overflow:hidden;vertical-align:middle}
@@ -255,6 +258,27 @@ export function verdict(r) {
   return { label: 'marginal', tone: 'muted', rank: 1 };
 }
 
+// Pareto / dominance layer (cave pass #2, both engines #1): the ev product can rank an
+// easy-sell weak home above a balanced one. A guild is DOMINATED when another guild is at least
+// as good on BOTH axes (FITn and GETn) and strictly better on one - i.e. there is a strictly
+// better target on every dimension, so it is never the right pick. The non-dominated set is the
+// Pareto FRONTIER: the real shortlist. Returns Map gid -> dominator gid (or null if on the
+// frontier). Exact ties are mutually non-dominated (both kept on the frontier).
+export function paretoDominated(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    const rf = num(r.FITn), rg = num(r.GETn);
+    let by = null;
+    for (const s of rows) {
+      if (s === r || s.gid === r.gid) continue;
+      const sf = num(s.FITn), sg = num(s.GETn);
+      if (sf >= rf && sg >= rg && (sf > rf || sg > rg)) { by = s.gid; break; }
+    }
+    m.set(r.gid, by);
+  }
+  return m;
+}
+
 // Sort master rows by a column key. Numeric keys sort numerically; string keys
 // (name, lang) sort case-insensitively; verdict sorts by its rank. Always falls
 // back to a deterministic tie-break (guild name, then id) so order is stable.
@@ -454,7 +478,7 @@ const TIP = {
   titan:'<b>Titanite / week.</b> Guild-chest titanite the merged roster would generate. Higher sustains gear progression. <em>Wide spread across targets: ~12k low, 60k median, 430k high \u2013 a real discriminator between dead and thriving guilds.</em>',
   fit:'<b>FIT (0\u2013100).</b> How GOOD the merged guild is FOR US: gold, peer balance, floor strength, sustain. <em>At the default full-squad (seat 20) setting the Gold-1 gap DOMINATES (~2/3 of the spread); peer/floor are minor and sustain barely moves it \u2013 the mix shifts as you drag the slider. Anchored to a FIXED 2026-06 reference (metric v1), so a guild\u2019s FIT does not change when OTHER guilds enter; re-baseline per season. Spread ~31/64/91 (median 64) over 66 guilds. Higher = better home ON MEASURED DIMS ONLY \u2013 it does NOT yet weigh the activity of the members you KEEP, and carries no confidence band. See GET for acceptance odds.</em>',
   get:'<b>GET (0\u2013100) = ease of acquisition: high GET means the GM likely says YES.</b> Built from low disruption (few ACTIVE members the GM must kick \u2013 most guilds sit near the top of this), open seats, and GM motivation (a coarse league-rank proxy; \u201cunknown\u201d is a placeholder, not a measurement). <em>At the default full-squad setting open-seats and motivation dominate; disruption matters more for small moves. Spread ~25/54/90 (median 54). * = low confidence. e.g. The Wayfarer Inn GET 87 (very gettable). High GET says NOTHING about whether it is a good home \u2013 always read FIT too.</em>',
-  verdict:'<b>Read.</b> A plain-language take combining FIT and GET. Rule: primary = FIT\u226585 & GET\u226555; stretch = FIT\u226585 (great home, hard to get); easy sell = GET\u226560 & FIT\u226555; weak home = GET\u226560 but FIT<55 (gettable yet a poor home \u2013 FIT is what you live in for months, GET is a one-time gate); fallback = FIT\u226565; else marginal. <em>These are HARD cutoffs \u2013 a guild a point under a line flips label, so read the raw FIT/GET too, not just the word. e.g. german black sheeps (90/80) = primary; The Wayfarer Inn (57/87) = easy sell but only a mediocre home.</em>',
+  verdict:'<b>Read.</b> A plain-language take combining FIT and GET. Rule: primary = FIT\u226585 & GET\u226555; stretch = FIT\u226585 (great home, hard to get); easy sell = GET\u226560 & FIT\u226555; weak home = GET\u226560 but FIT<55 (gettable yet a poor home \u2013 FIT is what you live in for months, GET is a one-time gate); fallback = FIT\u226565; else marginal. <em>These are HARD cutoffs \u2013 a guild a point under a line flips label, so read the raw FIT/GET too, not just the word. e.g. german black sheeps (90/80) = primary; The Wayfarer Inn (57/87) = easy sell but only a mediocre home. Rows shown DIMMED with a \u201cdominated\u201d tag are beaten by another guild on BOTH FIT and GET at once, so they are never the best pick \u2013 the non-dimmed rows are the Pareto shortlist.</em>',
   seats:'<b>Seats slider.</b> How many of our 20 players we insist on seating. Each guild then needs a different number of kicks to make room \u2014 that is why the table is not uniform.',
   rank:'<b>Rank</b> in the merged 30 by hero power. <em>A dot means this member does not make the cut of 30.</em>',
   member:'<b>Member.</b> A star marks the top-20 GW war team. The bottom 10 sit out Guild War but still play AoC and Clash of Worlds.',
@@ -578,9 +602,14 @@ function render(){
   });
   thead.append(htr); tbl.append(thead);
   const tb = el('tbody');
+  // Pareto layer: dim guilds that are beaten on BOTH FIT and GET by some other guild (never the
+  // right pick), so the non-dimmed rows are the real shortlist (the frontier).
+  const dom = paretoDominated(rows);
+  const nameOf = (gid)=>{ const m=rows.find(x=>x.gid===gid); return m?m.name:gid; };
   rows.forEach(r=>{
     const [vtext,vcls]=verdictUI(r);
-    const tr = el('tr',{class:state.gid===r.gid?'sel':''});
+    const domBy = dom.get(r.gid);
+    const tr = el('tr',{class:(state.gid===r.gid?'sel':'')+(domBy?' dominated':'')});
     tr.addEventListener('click',()=>{ state.gid=r.gid; render(); });
     const bar=(v,max,color)=>{ const b=el('span',{class:'bar'}); b.append(el('i',{style:`width:${Math.max(3,Math.min(100,100*v/max))}%;background:${color}`}), el('span',{},v.toFixed(0))); return b; };
     tr.append(
@@ -598,7 +627,7 @@ function render(){
       el('td',{class:'r'}, bar(r.FITn,100,'#22c55e')),
       el('td',{class:'r'}, bar(r.GETn,100,'#0ea5e9') ),
       el('td',{class:'r'}, bar(r.ev,100,'#7c3aed') ),
-      el('td',{}, [el('span',{class:'pill',style:`background:${vcls==='good'?'var(--goodbg)':vcls==='warn'?'#fffbeb':'#f5f5f4'};color:${vcls==='good'?'var(--good)':vcls==='warn'?'var(--warn)':'var(--muted)'}`}, vtext), r.conf==='low'?el('span',{class:'tag',style:'margin-left:4px'},'low-conf'):null]),
+      el('td',{}, [el('span',{class:'pill',style:`background:${vcls==='good'?'var(--goodbg)':vcls==='warn'?'#fffbeb':'#f5f5f4'};color:${vcls==='good'?'var(--good)':vcls==='warn'?'var(--warn)':'var(--muted)'}`}, vtext), r.conf==='low'?el('span',{class:'tag',style:'margin-left:4px'},'low-conf'):null, domBy?el('span',{class:'tag dom',style:'margin-left:4px'},'dominated by '+nameOf(domBy)):null]),
     );
     tb.append(tr);
   });
