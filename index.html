@@ -303,10 +303,13 @@ export function modeFit(pool, lang, gold) {
   const f20 = floorSlice(top20.map((m) => m.hero)), f30 = floorSlice(top30.map((m) => m.hero));
   const our20 = top20.filter((m) => m.us).length, our30 = top30.filter((m) => m.us).length;
   const ls = langScore(lang), g = num(gold);
-  const bal20 = _clamp01(1 - Math.abs(our20 / 20 - 0.5) / 0.5);
-  const bal30 = _clamp01(1 - Math.abs(our30 / 30 - 0.5) / 0.5);
-  let pGW = 100 * (0.9 * bal20 + 0.10 * ls); if (our20 / 20 > 0.7) pGW *= 0.6;   // GW takeover penalty
-  let pCoW = 100 * (0.9 * bal30 + 0.10 * ls); if (our30 / 30 > 0.7) pCoW *= 0.6;
+  // our SHARE uses the actual slice size (sub-cap merged pools have <30 or <20) - fixed /20,/30 would
+  // understate our share on a short roster (anthro-cave P1).
+  const sh20 = our20 / (top20.length || 1), sh30 = our30 / (top30.length || 1);
+  const bal20 = _clamp01(1 - Math.abs(sh20 - 0.5) / 0.5);
+  const bal30 = _clamp01(1 - Math.abs(sh30 - 0.5) / 0.5);
+  let pGW = 100 * (0.9 * bal20 + 0.10 * ls); if (sh20 > 0.7) pGW *= 0.6;   // takeover penalty (mirrors engine)
+  let pCoW = 100 * (0.9 * bal30 + 0.10 * ls); if (sh30 > 0.7) pCoW *= 0.6;
   const W = FIT_W;
   const gw = Math.round((W.gold * g + W.peer * pGW + W.floor * f20) * 10) / 10;
   const cow = Math.round((W.gold * g + W.peer * pCoW + W.floor * f30) * 10) / 10;
@@ -788,7 +791,7 @@ const TIP = {
   filter:'<b>Criteria filter.</b> Narrow the candidate set to guilds matching your hard rules: language(s), server-health rank ceiling, migrant (seated) band, and clean-kicks-only. <em>Filtering happens BEFORE ranking + Pareto, so the frontier is computed among the guilds you would actually consider. An empty facet = no constraint. The count shows how many of the full set survive.</em>',
   cleankick:'<b>Clean kicks only.</b> Hide guilds where seating our squad would displace an ACTIVE member (logged in \u22647d) who is STRONGER than the weakest migrant taking their place. <em>The owner\u2019s rule: it is fine to kick actives, but never one better than the replacement. Slider-dependent (more seats = more/harder kicks).</em>',
   srvhealth:'<b>Server-health rank.</b> 1 = healthiest measured server (by total weekly activity, titanite, Gold count and guild fill). <em>Folded into FIT as a server-liveness multiplier: a strong guild on a DYING server is a dead-end (AoW/CoW dry up). Capped so a busy server never RAISES FIT; a dead server takes a heavy cut. One-snapshot proxy \u2013 it cannot yet see a server slowly thinning over time.</em>',
-  permode:'<b>Per-mode fit (GW-20 vs CoW/AoW-30).</b> Guild War fields the merged guild\u2019s TOP 20; Asgard / Clash of Worlds field all 30. A guild can be strong for one and weak for the other. <em>Each mode-fit reuses the engine weights on the relevant roster slice: FLOOR and PEER (our share + balance, with the >70%-of-the-war-team takeover penalty) are recomputed on the top-20 vs top-30; the GOLD-1 gap component is SHARED across both (the champion\u2019s power is only known as a top-30 total, so it cannot be honestly split per mode). Additive/diagnostic only \u2013 it does NOT change FIT, GET, Pick or the ranking. \u201cLeans GW\u201d = stronger at the 20-man war than at 30-man depth; \u201cleans CoW\u201d = the reverse.</em>',
+  permode:'<b>Per-mode roster diagnostic (GW-20 vs CoW/AoW-30).</b> Guild War fields the merged guild\u2019s TOP 20; Asgard / Clash of Worlds field all 30. This compares the roster COMPOSITION of the two slices, NOT raw combat power. <em>Each score reuses the engine weights on the slice: FLOOR (tail depth) and PEER (our share + balance, with the >70%-of-the-slice takeover penalty), recomputed on the top-20 vs the top-30. IMPORTANT LIMITS: (1) this is balance + depth, NOT the top-20\u2019s power vs the rival\u2019s top-20 (we have no per-member champion roster to compare against). (2) The GOLD-1 gap is SHARED from the top-30 figure, so it OVERSTATES the GW side (the champion\u2019s 30-man total includes 10 non-war members). Treat \u201ctilts GW/CoW\u201d as \u201cwhere your roster is deeper/more balanced\u201d, not \u201cwhere you\u2019d win\u201d. Additive/diagnostic only \u2013 does NOT change FIT, GET, Pick or the ranking.</em>',
   members:'<b>Their members (known power).</b> Current roster the engine can score (a guild holds up to 30). <em>Varies guild to guild; NOT the post-merge total. A handful of members with no power reading are excluded.</em>',
   verdictrule:'<b>Read thresholds.</b> primary = FIT\u226585 & GET\u226555; stretch = FIT\u226585; easy sell = GET\u226560 & FIT\u226555; weak home = GET\u226560 & FIT<55; fallback = FIT\u226565; else marginal.',
   kicks:'<b>Kicks needed</b> for THIS guild to seat the slider number of our players. Derived per guild: members minus (30 minus seats). <em>e.g. 24 members, seat 20 of ours, needs to keep 10 so 14 kicks.</em>',
@@ -1245,15 +1248,15 @@ function drill(){
   const _lang=(bundle.members.find(m=>m.gid===gid)||{}).lang||'?';
   const pm=modeFit(mg.pool,_lang,num(sc.gold));
   const pmCard=el('div',{class:'modecard'});
-  const pmHd=el('div',{class:'mhd'}); pmHd.append('Per-mode fit'); pmHd.append(help(TIP.permode)); pmCard.append(pmHd);
+  const pmHd=el('div',{class:'mhd'}); pmHd.append('Per-mode roster (diagnostic, not combat power)'); pmHd.append(help(TIP.permode)); pmCard.append(pmHd);
   const mrow=(label,fit,floor,peer,ourN,team)=> el('div',{class:'mrow'},[
-    el('span',{class:'mlbl'},label), el('span',{class:'mfit'},'fit '+fit.toFixed(1)),
-    el('span',{class:'muted'},'floor '+floor), el('span',{class:'muted'},'peer '+peer),
+    el('span',{class:'mlbl'},label), el('span',{class:'mfit'},'score '+fit.toFixed(1)),
+    el('span',{class:'muted'},'depth '+floor), el('span',{class:'muted'},'balance '+peer),
     el('span',{class:'muted'},'ours '+ourN+'/'+team) ]);
   pmCard.append(
-    mrow('GW (top-20)',pm.gw,pm.floorGW,pm.peerGW,pm.our20,20),
-    mrow('CoW/AoW (top-30)',pm.cow,pm.floorCoW,pm.peerCoW,pm.our30,30),
-    el('div',{class:'mlean'},'Leans '+pm.lean+'  \u00b7  \u0394 '+pm.delta.toFixed(1)+'  \u00b7  gold '+pm.gold+' (shared, top-30 basis)'));
+    mrow('GW slice (top-20)',pm.gw,pm.floorGW,pm.peerGW,pm.our20,20),
+    mrow('CoW/AoW slice (top-30)',pm.cow,pm.floorCoW,pm.peerCoW,pm.our30,30),
+    el('div',{class:'mlean'},'Roster tilts '+pm.lean+'  \u00b7  \u0394 '+pm.delta.toFixed(1)+'  \u00b7  gold '+pm.gold+' shared from top-30 (overstates GW)'));
   card.append(pmCard);
 
   // rosters
