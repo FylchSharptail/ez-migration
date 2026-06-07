@@ -308,7 +308,12 @@ export function modeFit(pool, lang, gold) {
   const sh20 = our20 / (top20.length || 1), sh30 = our30 / (top30.length || 1);
   const bal20 = _clamp01(1 - Math.abs(sh20 - 0.5) / 0.5);
   const bal30 = _clamp01(1 - Math.abs(sh30 - 0.5) / 0.5);
-  let pGW = 100 * (0.9 * bal20 + 0.10 * ls); if (sh20 > 0.7) pGW *= 0.6;   // takeover penalty (mirrors engine)
+  // Takeover penalty only fires when OURS exceed 70% of the slice (not the partner's side). This is
+  // intentional and faithful to the production engine (scores_depth.peer): us owning the war team means
+  // we are absorbing them, which defeats the balance goal and risks the partner walking; the reverse
+  // (we contribute little) is already reflected by a low our-share. Balance is symmetric; this is the
+  // one deliberate asymmetry.
+  let pGW = 100 * (0.9 * bal20 + 0.10 * ls); if (sh20 > 0.7) pGW *= 0.6;
   let pCoW = 100 * (0.9 * bal30 + 0.10 * ls); if (sh30 > 0.7) pCoW *= 0.6;
   const W = FIT_W;
   const gw = Math.round((W.gold * g + W.peer * pGW + W.floor * f20) * 10) / 10;
