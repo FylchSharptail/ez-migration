@@ -324,8 +324,12 @@ export function dungeonHeavy(r) { return (num(r && r.dunp) || 0) >= 80; }
 // dungeonHeavy(r) (i.e. dunp), NEVER on whether `act` is present - a top-quintile-dungeon guild with a missing
 // activity number must still show its badge. Both fields are display-only; neither feeds FIT/GET/Pick/sort.
 export function activityCell(r) {
+  // anthro /cave: act must be null ("no data" -> "?") for missing OR non-finite input, NOT silently 0.
+  // num() maps non-finite to 0, so test finiteness of the RAW value before deciding null-vs-number (a bare
+  // `r.act != null` would turn act:NaN into a misleading "0 activity"). act:0 stays a real 0.
+  const rawAct = r && r.act != null ? (typeof r.act === 'number' ? r.act : parseFloat(r.act)) : null;
   return {
-    act: (r && r.act != null) ? num(r.act) : null,
+    act: Number.isFinite(rawAct) ? num(r.act) : null,
     badge: dungeonHeavy(r) ? ('dgn P' + Math.round(num(r && r.dunp))) : null,
   };
 }
